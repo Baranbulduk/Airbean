@@ -1,22 +1,20 @@
 import { Router } from 'express';
 import nedb from 'nedb-promises';
-import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-
-
 
 const menuDB = new nedb({ filename: 'airbean.db', autoload: true });
 const router = Router();
 
-
-
 // Middleware för autentisering och admin-kontroll
 const authenticateToken = (req, res, next) => {
-  const token = req.headers['authorization'];
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.sendStatus(401);
 
   jwt.verify(token, 'your_jwt_secret', (err, user) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      return res.status(403).send('Token är ogiltig eller har gått ut');
+    }
     req.user = user;
     next();
   });
@@ -29,42 +27,32 @@ const checkAdminRole = (req, res, next) => {
   next();
 };
 
-// Inloggningsrutt
-router.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  const user = await userDB.findOne({ username });
-
-  if (!user) return res.status(400).json({ message: 'Användare inte hittad' });
-
-  const validPassword = await bcrypt.compare(password, user.password);
-  if (!validPassword) return res.status(400).json({ message: 'Ogiltigt lösenord' });
-
-  const token = jwt.sign({ username: user.username, role: user.role }, 'your_jwt_secret', { expiresIn: '1h' });
-  res.json({ token });
-});
-
-
-
 // Kampanjrelaterad kod
 async function validateProducts(productIds) {
-  const products = await menuDB.find({ id: { $in: productIds } });
-  return products.length === productIds.length;
+  try {
+    const products = await menuDB.find({ id: { $in: productIds } });
+    const foundProductIds = products.map(product => product.id);
+    const missingProductIds = productIds.filter(id => !foundProductIds.includes(id));
+    return { isValid: missingProductIds.length === 0, missingProductIds };
+  } catch (err) {
+    throw new Error('Något gick fel vid produktvalidering');
+  }
 }
 
 router.post('/campaigns', authenticateToken, checkAdminRole, async (req, res) => {
-  const { productIds, price } = req.body;
-
-  const validProducts = await validateProducts(productIds);
-  if (!validProducts) {
-    return res.status(400).send('En eller flera produkter finns inte');
+  try {
+    const { productIds, price } = req.body;
+    const { isValid, missingProductIds } = await validateProducts(productIds);
+    if (!isValid) {
+      return res.status(400).send(`Följande produkter finns inte: ${missingProductIds.join(', ')}`);
+    }
+    const newCampaign = { productIds, price };
+    await menuDB.insert(newCampaign);
+    res.status(201).send('Kampanj tillagd!');
+  } catch (err) {
+    res.status(500).send('Något gick fel när kampanjen skulle läggas till');
   }
-
-  const newCampaign = { productIds, price };
-  await menuDB.insert(newCampaign);
-  res.status(201).send('Kampanj tillagd!');
 });
-
-
 
 // Route to get all menu items
 router.get('/', async (req, res) => {
@@ -77,8 +65,6 @@ router.get('/', async (req, res) => {
     res.status(500).send("Internal Server Error");
   }
 });
-
-
 
 // Route to add a new menu item
 router.post('/', async (req, res) => {
@@ -105,8 +91,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-
-
 // Route to update a menu item by id
 router.put('/:id', async (req, res) => {
   const itemId = req.params.id;
@@ -126,12 +110,9 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-
-
 // Route to delete a menu item by id
 router.delete('/:id', async (req, res) => {
   const itemId = req.params.id;
-
   try {
     const numRemoved = await menuDB.remove({ _id: itemId });
     if (numRemoved > 0) {
@@ -144,8 +125,6 @@ router.delete('/:id', async (req, res) => {
     res.status(500).send("Internal Server Error");
   }
 });
-
-
 
 // Route to get a specific menu item by id
 router.get('/:id', async (req, res) => {
@@ -164,8 +143,6 @@ router.get('/:id', async (req, res) => {
     res.status(500).send("Internal Server Error");
   }
 });
-
-
 
 export default router;
 export { menuDB };

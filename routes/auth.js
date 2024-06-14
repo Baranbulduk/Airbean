@@ -1,10 +1,12 @@
 import { Router } from "express";
 import userSchema from "../models/userModel.js";
-import nedb from 'nedb-promises';
+import nedb from 'nedb-promises'; import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
 const usersDB = new nedb({ filename: 'users.db', autoload: true });
 const router = Router();
 
+// Inloggningsrutt
 router.post('/login', async (req, res) => {
     try {
         console.log('Login attempt:', req.body);
@@ -13,17 +15,22 @@ router.post('/login', async (req, res) => {
             console.log('Validation error:', error.details[0].message);
             return res.status(400).json({ success: false, message: error.details[0].message });
         }
-        const { username, password } = req.body;
-        const user = await usersDB.findOne({ username, password });
 
-        if (user) {
-            console.log('User found:', user);
-            global.currentUser = user;
-            return res.json({ success: true, message: 'Login successful', user });
-        } else {
-            console.log('Invalid credentials');
-            return res.status(400).json({ success: false, message: 'Invalid credentials' });
+        const { username, password } = req.body;
+        const user = await usersDB.findOne({ username });
+        if (!user) {
+            console.log('Användare inte hittad');
+            return res.status(400).json({ success: false, message: 'Användare inte hittad' });
         }
+
+        const validPassword = await bcrypt.compare(password, user.password);
+        if (!validPassword) {
+            console.log('Ogiltigt lösenord');
+            return res.status(400).json({ success: false, message: 'Ogiltigt lösenord' });
+        }
+
+        const token = jwt.sign({ username: user.username, role: user.role }, 'your_jwt_secret', { expiresIn: '1h' });
+        res.json({ success: true, token });
     } catch (error) {
         console.error('Server error:', error);
         return res.status(500).json({ success: false, message: 'Server error', error });
